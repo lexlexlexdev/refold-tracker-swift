@@ -13,11 +13,25 @@ final class RefoldAdapter: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindo
     private var popupWindows: [ObjectIdentifier: NSWindow] = [:]
     var onNavigation: (() -> Void)?
 
-    override init() {
+    init(loadResources: Void = ()) throws {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
-        let bridgeURL = Bundle.module.url(forResource: "Bridge", withExtension: "js")!
-        let bridge = try! String(contentsOf: bridgeURL, encoding: .utf8)
+        let bridgeURL: URL
+        if Bundle.main.bundleURL.pathExtension == "app" {
+            // SPM's generated Bundle.module lookup is not relocatable inside a macOS app.
+            guard let resources = Bundle.main.resourceURL else {
+                throw NSError(domain: "RefoldTracker.Resources", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "App resources are missing. Reinstall Refold Tracker."])
+            }
+            bridgeURL = resources.appendingPathComponent("RefoldTracker_RefoldTracker.bundle/Bridge.js")
+        } else {
+            guard let resource = Bundle.module.url(forResource: "Bridge", withExtension: "js") else {
+                throw NSError(domain: "RefoldTracker.Resources", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "Bridge.js is missing. Rebuild Refold Tracker."])
+            }
+            bridgeURL = resource
+        }
+        let bridge = try String(contentsOf: bridgeURL, encoding: .utf8)
         configuration.userContentController.addUserScript(WKUserScript(source: bridge,
                                                                        injectionTime: .atDocumentEnd,
                                                                        forMainFrameOnly: true))

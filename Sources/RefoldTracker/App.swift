@@ -28,7 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         do {
             let database = try Database()
-            let adapter = RefoldAdapter()
+            let adapter = try RefoldAdapter()
             let model = try TrackerModel(database: database, initial: database.load(), adapter: adapter)
             self.model = model
             item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -60,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             registerShortcut()
         } catch {
             let alert = NSAlert()
-            alert.messageText = "Refold Tracker cannot open local storage"
+            alert.messageText = "Refold Tracker could not start"
             alert.informativeText = error.localizedDescription + "\nYour data has not been reset."
             alert.runModal()
             NSApp.terminate(nil)
