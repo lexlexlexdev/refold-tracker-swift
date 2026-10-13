@@ -70,7 +70,7 @@ struct TrackerView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 166, alignment: .top)
+            .frame(height: 154, alignment: .top)
             HStack(spacing: 6) {
                 Text("Learned today:").foregroundStyle(.secondary)
                 Text(durationText(model.learnedTodayMs))
@@ -129,11 +129,13 @@ struct TrackerView: View {
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.frame(height: 220)
-            Text(model.message ?? "")
-                .font(.caption).foregroundStyle(.orange).lineLimit(3).textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .frame(height: 40, alignment: .top)
-                .help(model.message ?? "")
+            if let message = model.message, !message.isEmpty {
+                Text(message)
+                    .font(.caption).foregroundStyle(.orange).lineLimit(3).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .frame(height: 40, alignment: .top)
+                    .help(message)
+            }
             HStack {
                 Button("Sign in / open Refold") { model.adapter.showLogin() }
                 Spacer()
@@ -141,7 +143,9 @@ struct TrackerView: View {
             }.font(.caption)
             Text("⌃⌥R to open · sleep ends tracking").font(.caption2).foregroundStyle(.secondary)
         }
-        .padding(18).frame(width: 390, height: 668, alignment: .top)
+        .padding(18).frame(width: 390,
+                           height: model.message?.isEmpty == false ? 656 : 602,
+                           alignment: .top)
         .transaction { $0.animation = nil }
         .alert("Discard this session?", isPresented: $confirmingCancel) {
             Button("Keep Tracking", role: .cancel) { cancelSessionID = nil }
