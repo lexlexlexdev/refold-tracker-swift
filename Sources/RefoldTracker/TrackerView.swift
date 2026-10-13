@@ -71,11 +71,16 @@ struct TrackerView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: 154, alignment: .top)
-            HStack(spacing: 6) {
-                Text("Learned today:").foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text("Learned today")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(.secondary)
                 Text(durationText(model.learnedTodayMs))
-                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .font(.system(size: 11, weight: .regular))
+                    .monospacedDigit()
+                    .foregroundStyle(.primary.opacity(0.8))
             }
+            .padding(.vertical, 6)
             Divider()
             HStack {
                 Text("Recent entries").font(.subheadline.weight(.semibold))
@@ -144,7 +149,7 @@ struct TrackerView: View {
             Text("⌃⌥R to open · sleep ends tracking").font(.caption2).foregroundStyle(.secondary)
         }
         .padding(18).frame(width: 390,
-                           height: model.message?.isEmpty == false ? 656 : 602,
+                           height: model.message?.isEmpty == false ? 668 : 614,
                            alignment: .top)
         .transaction { $0.animation = nil }
         .alert("Discard this session?", isPresented: $confirmingCancel) {
