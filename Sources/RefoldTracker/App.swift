@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var subscription: AnyCancellable?
     private var hotKey: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
+    private var pendingControlURLs: [URL] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         do {
@@ -31,28 +32,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let adapter = try RefoldAdapter()
             let model = try TrackerModel(database: database, initial: database.load(), adapter: adapter)
             self.model = model
-            item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            pendingControlURLs.forEach(handleControlURL)
+            pendingControlURLs.removeAll()
+            // Keep the popover anchor stable when the title or tracking state changes.
+            item = NSStatusBar.system.statusItem(withLength: 112)
             item?.button?.image = NSImage(systemSymbolName: "stopwatch", accessibilityDescription: "Refold Tracker")
             item?.button?.target = self
             item?.button?.action = #selector(togglePopover)
             popover.behavior = .transient
             popover.contentViewController = NSHostingController(rootView: TrackerView(model: model))
             subscription = model.$elapsedMs.combineLatest(model.$state).sink { [weak self] elapsed, state in
-                self?.item?.button?.title = state.active == nil ? "" : " " + durationText(elapsed)
+                self?.item?.button?.title = state.active == nil ? " Refold" : " " + durationText(elapsed)
                 self?.item?.button?.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-                if state.active == nil {
-                    self?.timer?.fireDate = .distantFuture
-                } else if self?.timer?.fireDate == .distantFuture {
-                    self?.timer?.fireDate = Date().addingTimeInterval(1)
-                }
+                let paused = state.active?.pausedAt != nil
+                self?.item?.button?.image = NSImage(systemSymbolName: paused ? "pause.circle" : "stopwatch",
+                                                   accessibilityDescription: paused ? "Tracking paused" : "Refold Tracker")
+                self?.item?.button?.image?.size = NSSize(width: 16, height: 16)
+                self?.setTimerActive(state.active != nil && !paused)
             }
-            let timer = Timer(timeInterval: 1, repeats: true) { [weak model] _ in
-                MainActor.assumeIsolated { model?.tick() }
-            }
-            RunLoop.main.add(timer, forMode: .common)
-            timer.tolerance = 0.2
-            if model.state.active == nil { timer.fireDate = .distantFuture }
-            self.timer = timer
             NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(willSleep),
                                                                name: NSWorkspace.willSleepNotification, object: nil)
             NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didWake),
@@ -67,17 +64,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func setTimerActive(_ active: Bool) {
+        if !active {
+            timer?.invalidate()
+            timer = nil
+            return
+        }
+        guard timer == nil else { return }
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak model] _ in
+            MainActor.assumeIsolated { model?.tick() }
+        }
+        timer.tolerance = 0.2
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
     @objc private func togglePopover() {
         guard let button = item?.button else { return }
         if popover.isShown { popover.performClose(nil) }
-        else {
-            NSApp.activate(ignoringOtherApps: true)
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
-        }
+        else { showPopover(using: button) }
+    }
+
+    private func showPopover(using button: NSStatusBarButton? = nil) {
+        guard !popover.isShown, let button = button ?? item?.button else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
     }
     @objc private func willSleep() { model?.willSleep() }
     @objc private func didWake() { model?.didWake() }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        urls.forEach(handleControlURL)
+    }
+
+    private func handleControlURL(_ url: URL) {
+        guard url.scheme?.lowercased() == "refoldtracker",
+              url.user == nil, url.password == nil, url.port == nil,
+              url.path.isEmpty || url.path == "/",
+              url.query == nil, url.fragment == nil,
+              let command = url.host?.lowercased(), ["pause", "resume", "toggle"].contains(command) else { return }
+        guard let model else {
+            pendingControlURLs.append(url)
+            return
+        }
+        if command == "pause" {
+            model.pause()
+        } else if command == "resume" {
+            model.resume()
+        } else if let active = model.state.active {
+            if active.pausedAt == nil { model.pause() } else { model.resume() }
+        } else {
+            model.message = "No active session to pause or resume."
+            showPopover()
+        }
+        NSLog("Handled Tinycast Refold command: %@", command)
+    }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard model?.stop(shouldSync: false) != false else { return .terminateCancel }

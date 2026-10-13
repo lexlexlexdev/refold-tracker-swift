@@ -13,6 +13,9 @@ Native macOS · SwiftUI · Offline-first
 ### Stay focused
 
 - **Track** three fixed activities with a live menu-bar stopwatch.
+- **Pause / resume** without counting breaks.
+- **Toggle pause / resume from Tinycast** with the `Toggle Refold Tracking` command.
+- **Cancel** an active session without saving—with confirmation.
 - **Edit** duration or **delete** an entry—with confirmation.
 - **Sync** to Refold using your own sign-in session, including Google popups.
 - **Recover** local progress after a crash. Sleep ends tracking.

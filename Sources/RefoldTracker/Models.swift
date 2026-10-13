@@ -43,6 +43,7 @@ struct LocalEntry: Codable, Identifiable {
     var id = UUID()
     var action: TrackingAction
     var startedAt: Date
+    var pausedAt: Date?
     var durationMs: Int64 = 0
     var attributedDate: String
     var startTime: String

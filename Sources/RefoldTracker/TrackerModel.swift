@@ -13,6 +13,7 @@ final class TrackerModel: ObservableObject {
     let adapter: RefoldAdapter
     private let database: Database
     private var monotonicStart: TimeInterval?
+    private var accumulatedMs: Int64 = 0
     private var lastCheckpoint: TimeInterval = 0
 
     init(database: Database, initial: Snapshot, adapter: RefoldAdapter) throws {
@@ -38,12 +39,35 @@ final class TrackerModel: ObservableObject {
 
     var menuTitle: String { state.active == nil ? "" : durationText(elapsedMs) }
 
+    var learnedTodayMs: Int64 {
+        let today = LocalEntry.format(Date(), pattern: "yyyy-MM-dd")
+        let todaysRemote = state.remoteEntries.filter {
+            $0.isInScope && $0.attributedDate == today
+        }
+        let remoteTotal = todaysRemote.reduce(Int64(0)) {
+            $0 + max(0, $1.durationMs)
+        }
+        let localTotal = state.entries
+            .filter { entry in
+                guard entry.attributedDate == today else { return false }
+                if let remoteID = entry.remoteID,
+                   todaysRemote.contains(where: { $0.id == remoteID }) { return false }
+                return !todaysRemote.contains(where: { $0.matches(entry) })
+            }
+            .reduce(Int64(0)) { $0 + max(0, $1.durationMs) }
+        let activeTotal = state.active.map {
+            $0.attributedDate == today ? max(0, elapsedMs) : 0
+        } ?? 0
+        return remoteTotal + localTotal + activeTotal
+    }
+
     func start(_ action: TrackingAction) {
         guard state.active == nil, storageHealthy else { return }
         var next = state
         next.active = LocalEntry(action: action)
         guard commit(next) else { return }
         monotonicStart = ProcessInfo.processInfo.systemUptime
+        accumulatedMs = 0
         lastCheckpoint = monotonicStart!
         elapsedMs = 0
     }
@@ -51,7 +75,7 @@ final class TrackerModel: ObservableObject {
     func tick() {
         guard let start = monotonicStart, state.active != nil else { return }
         let now = ProcessInfo.processInfo.systemUptime
-        elapsedMs = max(0, Int64((now - start) * 1_000))
+        elapsedMs = accumulatedMs + max(0, Int64((now - start) * 1_000))
         if now - lastCheckpoint >= 5 {
             var next = state
             next.active?.durationMs = elapsedMs
@@ -59,24 +83,63 @@ final class TrackerModel: ObservableObject {
         }
     }
 
+    func pause() {
+        guard var active = state.active, active.pausedAt == nil,
+              let start = monotonicStart, storageHealthy else { return }
+        let duration = accumulatedMs + max(0, Int64((ProcessInfo.processInfo.systemUptime - start) * 1_000))
+        active.durationMs = duration
+        active.pausedAt = Date()
+        var next = state
+        next.active = active
+        guard commit(next) else { return }
+        accumulatedMs = duration
+        monotonicStart = nil
+        elapsedMs = duration
+    }
+
+    func resume() {
+        guard var active = state.active, active.pausedAt != nil, storageHealthy else { return }
+        active.pausedAt = nil
+        var next = state
+        next.active = active
+        guard commit(next) else { return }
+        accumulatedMs = active.durationMs
+        monotonicStart = ProcessInfo.processInfo.systemUptime
+        lastCheckpoint = monotonicStart!
+        elapsedMs = accumulatedMs
+    }
+
     @discardableResult
     func stop(shouldSync: Bool = true) -> Bool {
         guard var entry = state.active else { return true }
         if let start = monotonicStart {
-            entry.durationMs = max(1, Int64((ProcessInfo.processInfo.systemUptime - start) * 1_000))
+            entry.durationMs = max(1, accumulatedMs + Int64((ProcessInfo.processInfo.systemUptime - start) * 1_000))
         }
+        entry.durationMs = max(1, entry.durationMs)
+        entry.pausedAt = nil
         entry.delivery = .pending
         var next = state
         next.active = nil
         next.entries.insert(entry, at: 0)
         guard commit(next) else { return false }
         monotonicStart = nil
+        accumulatedMs = 0
         elapsedMs = 0
         if shouldSync { Task { await sync() } }
         return true
     }
 
     func willSleep() { _ = stop(shouldSync: false) }
+
+    func cancelSession(id: UUID) {
+        guard state.active?.id == id, storageHealthy else { return }
+        var next = state
+        next.active = nil
+        guard commit(next) else { return }
+        monotonicStart = nil
+        accumulatedMs = 0
+        elapsedMs = 0
+    }
 
     func didWake() {
         // Fallback when willSleep was not delivered. Do not include unobserved sleep time.

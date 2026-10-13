@@ -11,6 +11,8 @@ struct EditTarget: Identifiable {
 struct TrackerView: View {
     @ObservedObject var model: TrackerModel
     @State private var editTarget: EditTarget?
+    @State private var confirmingCancel = false
+    @State private var cancelSessionID: UUID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -20,30 +22,68 @@ struct TrackerView: View {
                 Text("Korean").foregroundStyle(.secondary)
                 Circle().fill(model.connected ? Color.green : Color.orange).frame(width: 7, height: 7)
             }
-            if let active = model.state.active {
-                Text(active.action.name).font(.headline)
-                Text(durationText(model.elapsedMs)).font(.system(size: 36, weight: .medium, design: .monospaced))
-                Button("Stop & Save") { model.stop() }
-                    .buttonStyle(.borderedProminent).disabled(!model.storageHealthy)
-            } else {
-                ForEach(TrackingAction.allCases) { action in
-                    Button { model.start(action) } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(action.name).foregroundStyle(.primary)
-                                Text(action.activity).font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Image(systemName: "play.fill").foregroundStyle(.purple)
-                        }.padding(7).contentShape(Rectangle())
-                    }.buttonStyle(.plain).disabled(!model.storageHealthy)
+            VStack(alignment: .leading, spacing: 14) {
+                if let active = model.state.active {
+                    Text(active.action.name).font(.headline)
+                    HStack(spacing: 14) {
+                        Text(durationText(model.elapsedMs))
+                            .font(.system(size: 36, weight: .medium, design: .monospaced))
+                            .lineLimit(1).minimumScaleFactor(0.8)
+                        Button {
+                            if active.pausedAt == nil { model.pause() } else { model.resume() }
+                        } label: {
+                            Image(systemName: active.pausedAt == nil ? "pause.fill" : "play.fill")
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundStyle(.purple)
+                                .frame(width: 32, height: 36)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!model.storageHealthy)
+                        .help(active.pausedAt == nil ? "Pause tracking" : "Resume tracking")
+                        .accessibilityLabel(active.pausedAt == nil ? "Pause tracking" : "Resume tracking")
+                    }
+                    Text("Paused").font(.caption).foregroundStyle(.secondary)
+                        .opacity(active.pausedAt != nil ? 1 : 0)
+                        .accessibilityHidden(active.pausedAt == nil)
+                    HStack {
+                        Button("Stop & Save") { model.stop() }
+                            .buttonStyle(.borderedProminent).disabled(!model.storageHealthy)
+                        Button("Cancel", role: .destructive) {
+                            cancelSessionID = active.id
+                            confirmingCancel = true
+                        }.buttonStyle(.bordered).disabled(!model.storageHealthy)
+                    }
+                } else {
+                    ForEach(TrackingAction.allCases) { action in
+                        Button { model.start(action) } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(action.name).foregroundStyle(.primary)
+                                    Text(action.activity).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "play.fill").foregroundStyle(.purple)
+                            }.padding(7).contentShape(Rectangle())
+                        }.buttonStyle(.plain).disabled(!model.storageHealthy)
+                    }
                 }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 166, alignment: .top)
+            HStack(spacing: 6) {
+                Text("Learned today:").foregroundStyle(.secondary)
+                Text(durationText(model.learnedTodayMs))
+                    .font(.system(size: 13, weight: .medium, design: .monospaced))
             }
             Divider()
             HStack {
                 Text("Recent entries").font(.subheadline.weight(.semibold))
                 Spacer()
-                if model.syncing { ProgressView().controlSize(.small) }
+                ProgressView().controlSize(.small)
+                    .frame(width: 16, height: 16)
+                    .opacity(model.syncing ? 1 : 0)
+                    .accessibilityHidden(!model.syncing)
                 Button { Task { await model.sync() } } label: { Image(systemName: "arrow.clockwise") }
                     .disabled(model.syncing).help("Refresh and verify sync")
             }
@@ -89,9 +129,11 @@ struct TrackerView: View {
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.frame(height: 220)
-            if let message = model.message {
-                Text(message).font(.caption).foregroundStyle(.orange).lineLimit(5).textSelection(.enabled)
-            }
+            Text(model.message ?? "")
+                .font(.caption).foregroundStyle(.orange).lineLimit(3).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .frame(height: 40, alignment: .top)
+                .help(model.message ?? "")
             HStack {
                 Button("Sign in / open Refold") { model.adapter.showLogin() }
                 Spacer()
@@ -99,7 +141,17 @@ struct TrackerView: View {
             }.font(.caption)
             Text("⌃⌥R to open · sleep ends tracking").font(.caption2).foregroundStyle(.secondary)
         }
-        .padding(18).frame(width: 390)
+        .padding(18).frame(width: 390, height: 668, alignment: .top)
+        .transaction { $0.animation = nil }
+        .alert("Discard this session?", isPresented: $confirmingCancel) {
+            Button("Keep Tracking", role: .cancel) { cancelSessionID = nil }
+            Button("Discard", role: .destructive) {
+                if let id = cancelSessionID { model.cancelSession(id: id) }
+                cancelSessionID = nil
+            }
+        } message: {
+            Text("The current session will be discarded without saving to Refold. This cannot be undone.")
+        }
         .sheet(item: $editTarget) { target in
             DurationEditor(target: target, save: { duration in
                 if let local = target.local { model.editLocal(id: local.id, durationMs: duration) }
@@ -115,7 +167,13 @@ struct TrackerView: View {
         HStack(alignment: .top) {
             Text(name).font(.subheadline).frame(maxWidth: .infinity, alignment: .leading)
             Text(durationText(duration)).font(.system(.caption, design: .monospaced))
-            if editable { Button(action: edit) { Image(systemName: "pencil") }.buttonStyle(.plain) }
+            Button(action: edit) {
+                Image(systemName: "pencil").frame(width: 18, height: 18)
+            }
+            .buttonStyle(.plain)
+            .disabled(!editable)
+            .opacity(editable ? 1 : 0)
+            .accessibilityHidden(!editable)
         }
     }
 }

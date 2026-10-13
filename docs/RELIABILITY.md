@@ -23,6 +23,13 @@ the real Refold site; it is not a restricted kiosk.
 - SQLite: `~/Library/Application Support/RefoldTracker/tracker.sqlite`, WAL, synchronous FULL.
 - Start and stop are committed before changing the UI or sending a mutation.
 - The display uses monotonic elapsed time. Active duration checkpoints every five seconds.
+- Pause commits the exact accrued duration and suspends UI ticking. Resume starts a new
+  monotonic segment; breaks are excluded. Stop while paused saves only accrued time.
+  After a crash, paused sessions follow the same review workflow as running sessions.
+- The `refoldtracker://toggle` handler pauses a running session or resumes a paused one
+  through the same persisted native transitions. With no active session, it leaves tracking
+  unchanged and opens the tracker with a message. Tinycast never reads, writes, or stores
+  the session.
 - Sleep ends the session locally; wake attempts synchronization. No automatic restart.
 - Normal quit ends the session locally; the next launch attempts synchronization.
 - After an abnormal exit, the last checkpoint becomes an entry requiring duration review.

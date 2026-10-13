@@ -1,0 +1,17 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "refold-tracker-controls",
+  "title": "Refold Tracker Controls",
+  "description": "Pause or resume the native Refold Tracker from Tinycast.",
+  "icon": "icon.png",
+  "owner": "lexlexlexdev",
+  "commands": [
+    {
+      "name": "toggle",
+      "title": "Toggle Refold Tracking",
+      "description": "Pause the running session or resume a paused session.",
+      "mode": "no-view",
+      "keywords": ["refold", "timer", "pause", "resume", "break", "continue"]
+    }
+  ]
+}
