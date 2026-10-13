@@ -149,7 +149,19 @@ struct DurationEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Edit entry").font(.headline)
+            HStack {
+                Text("Edit entry").font(.headline)
+                Spacer()
+                Button(role: .destructive) { confirmingDelete = true } label: {
+                    Image(systemName: "trash")
+                        .foregroundStyle(.red)
+                        .padding(6)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Delete entry")
+                .accessibilityLabel("Delete entry")
+            }
             Text(target.name).font(.subheadline)
             HStack {
                 field("Hours", text: $hours)
@@ -158,7 +170,6 @@ struct DurationEditor: View {
             }
             Text("Date, start time, activity and language stay unchanged.").font(.caption).foregroundStyle(.secondary)
             HStack {
-                Button("Delete", role: .destructive) { confirmingDelete = true }
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("Save") {

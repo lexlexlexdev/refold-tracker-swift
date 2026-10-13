@@ -43,8 +43,8 @@ client calls to `saveAction` / `editUserAction`. This prototype discovers Next.j
 Action IDs from the current dashboard scripts and invokes them in the authenticated WebKit
 context. It does not hard-code build hashes, export Chrome cookies or collect passwords.
 
-**Google popup login, history loading, stopwatch saving and duration editing have been
-verified manually against Refold. Deletion has not yet been verified against the account.**
+**Google popup login, history loading, stopwatch saving, duration editing and confirmed
+deletion have been verified manually against Refold.**
 This is an internal, undocumented integration, not a supported Refold API. Site changes may
 break reads or writes; local tracking remains independent. Firebase provider login may be
 restricted by Google inside WebKit even with popup support. A Google `disallowed_useragent`
