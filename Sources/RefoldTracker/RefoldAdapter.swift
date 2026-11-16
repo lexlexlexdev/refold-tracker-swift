@@ -57,6 +57,10 @@ final class RefoldAdapter: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindo
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    var hasVisibleBrowserWindow: Bool {
+        (loginWindow?.isVisible ?? false) || popupWindows.values.contains { $0.isVisible }
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if webView === self.webView { onNavigation?() }
     }
