@@ -87,9 +87,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showPopover(using button: NSStatusBarButton? = nil) {
         guard !popover.isShown, let button = button ?? item?.button else { return }
-        NSApp.activate(ignoringOtherApps: true)
+        // Activating while the Refold web window is open makes macOS switch to the
+        // Space containing that window. Keep the app inactive in that case; the click
+        // inside the popover activates it on the current Space instead.
+        let browserOpen = model?.adapter.hasVisibleBrowserWindow == true
+        if !browserOpen {
+            NSApp.activate(ignoringOtherApps: true)
+        }
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        popover.contentViewController?.view.window?.makeKey()
+        guard let window = popover.contentViewController?.view.window else { return }
+        var behavior = window.collectionBehavior
+        behavior.remove(.moveToActiveSpace)
+        behavior.insert(.canJoinAllSpaces)
+        behavior.insert(.fullScreenAuxiliary)
+        window.collectionBehavior = behavior
+        if !browserOpen {
+            window.makeKey()
+        }
     }
     @objc private func willSleep() { model?.willSleep() }
     @objc private func didWake() { model?.didWake() }
