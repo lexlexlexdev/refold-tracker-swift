@@ -12,6 +12,7 @@ final class RefoldAdapter: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindo
     private var loginWindow: NSWindow?
     private var popupWindows: [ObjectIdentifier: NSWindow] = [:]
     var onNavigation: (() -> Void)?
+    var onOpenBrowser: (() -> Void)?
 
     init(loadResources: Void = ()) throws {
         let configuration = WKWebViewConfiguration()
@@ -53,12 +54,14 @@ final class RefoldAdapter: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindo
             window.center()
             loginWindow = window
         }
+        onOpenBrowser?()
         loginWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
     var hasVisibleBrowserWindow: Bool {
-        (loginWindow?.isVisible ?? false) || popupWindows.values.contains { $0.isVisible }
+        (loginWindow?.isVisible ?? false) || (loginWindow?.isMiniaturized ?? false)
+            || popupWindows.values.contains { $0.isVisible || $0.isMiniaturized }
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
