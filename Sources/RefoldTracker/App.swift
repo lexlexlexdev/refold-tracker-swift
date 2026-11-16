@@ -15,11 +15,21 @@ enum RefoldTrackerApp {
     }
 }
 
+final class MenuBarPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var model: TrackerModel?
     private var item: NSStatusItem?
-    private let popover = NSPopover()
+    private var panel: MenuBarPanel?
+    private var hostingController: NSHostingController<AnyView>?
+    private var sizeObservation: NSKeyValueObservation?
+    private var outsideMonitor: Any?
+    private var localMouseMonitor: Any?
+    private var escapeMonitor: Any?
     private var timer: Timer?
     private var subscription: AnyCancellable?
     private var hotKey: EventHotKeyRef?
@@ -32,15 +42,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let adapter = try RefoldAdapter()
             let model = try TrackerModel(database: database, initial: database.load(), adapter: adapter)
             self.model = model
-            pendingControlURLs.forEach(handleControlURL)
-            pendingControlURLs.removeAll()
-            // Keep the popover anchor stable when the title or tracking state changes.
+            adapter.onOpenBrowser = { [weak self] in self?.closePanel() }
+            // Keep the status item anchor stable when the title or tracking state changes.
             item = NSStatusBar.system.statusItem(withLength: 112)
             item?.button?.image = NSImage(systemSymbolName: "stopwatch", accessibilityDescription: "Refold Tracker")
             item?.button?.target = self
-            item?.button?.action = #selector(togglePopover)
-            popover.behavior = .transient
-            popover.contentViewController = NSHostingController(rootView: TrackerView(model: model))
+            item?.button?.action = #selector(togglePanel)
+            setupPanel(model: model)
+            pendingControlURLs.forEach(handleControlURL)
+            pendingControlURLs.removeAll()
             subscription = model.$elapsedMs.combineLatest(model.$state).sink { [weak self] elapsed, state in
                 self?.item?.button?.title = state.active == nil ? " Refold" : " " + durationText(elapsed)
                 self?.item?.button?.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
@@ -54,6 +64,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                                name: NSWorkspace.willSleepNotification, object: nil)
             NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didWake),
                                                                name: NSWorkspace.didWakeNotification, object: nil)
+            NotificationCenter.default.addObserver(
+                forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.closePanel() }
+            }
             registerShortcut()
         } catch {
             let alert = NSAlert()
@@ -79,31 +94,149 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         RunLoop.main.add(timer, forMode: .common)
     }
 
-    @objc private func togglePopover() {
-        guard let button = item?.button else { return }
-        if popover.isShown { popover.performClose(nil) }
-        else { showPopover(using: button) }
+    private func setupPanel(model: TrackerModel) {
+        let content = TrackerView(model: model)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        let host = NSHostingController(rootView: AnyView(content))
+        host.sizingOptions = .preferredContentSize
+        let panel = MenuBarPanel(contentRect: NSRect(x: 0, y: 0, width: 390, height: 560),
+                                 styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
+                                 backing: .buffered, defer: false)
+        panel.isFloatingPanel = true
+        panel.level = .statusBar
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
+        panel.hidesOnDeactivate = false
+        panel.isMovable = false
+        panel.isReleasedWhenClosed = false
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
+        panel.animationBehavior = .utilityWindow
+        panel.contentViewController = host
+        self.panel = panel
+        self.hostingController = host
+        sizeObservation = host.observe(\.preferredContentSize, options: [.new]) { [weak self] _, _ in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.updatePanelFrame() }
+            }
+        }
     }
 
-    private func showPopover(using button: NSStatusBarButton? = nil) {
-        guard !popover.isShown, let button = button ?? item?.button else { return }
+    private func updatePanelFrame(under button: NSStatusBarButton? = nil) {
+        guard let panel, let host = hostingController,
+              let button = button ?? item?.button, let window = button.window,
+              let screen = window.screen else { return }
+        var size = host.preferredContentSize
+        if size.width < 100 || size.height < 100 {
+            size = NSSize(width: 390, height: 560)
+        }
+        let visible = screen.visibleFrame
+        let width = size.width
+        let height = min(size.height, visible.height - 40)
+        let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
+        var x = anchor.midX - width / 2
+        x = min(max(x, visible.minX + 8), visible.maxX - width - 8)
+        let y = max(anchor.minY - height - 6, visible.minY + 8)
+        panel.setFrame(NSRect(x: x.rounded(), y: y.rounded(), width: width, height: height), display: true)
+        panel.invalidateShadow()
+    }
+
+    @objc private func togglePanel() {
+        guard let button = item?.button else { return }
+        if panel?.isVisible == true { closePanel() }
+        else { showPanel(using: button) }
+    }
+
+    private func showPanel(using button: NSStatusBarButton? = nil) {
+        guard let panel, let button = button ?? item?.button, !panel.isVisible else { return }
+        panel.contentView?.layoutSubtreeIfNeeded()
+        updatePanelFrame(under: button)
         // Activating while the Refold web window is open makes macOS switch to the
-        // Space containing that window. Keep the app inactive in that case; the click
-        // inside the popover activates it on the current Space instead.
+        // Space containing that window. Present the panel without key/app activation
+        // in that case; the click inside it activates the app on the current Space.
         let browserOpen = model?.adapter.hasVisibleBrowserWindow == true
-        if !browserOpen {
+        if browserOpen {
+            panel.orderFront(nil)
+        } else {
             NSApp.activate(ignoringOtherApps: true)
+            panel.makeKeyAndOrderFront(nil)
         }
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        guard let window = popover.contentViewController?.view.window else { return }
-        var behavior = window.collectionBehavior
-        behavior.remove(.moveToActiveSpace)
-        behavior.insert(.canJoinAllSpaces)
-        behavior.insert(.fullScreenAuxiliary)
-        window.collectionBehavior = behavior
-        if !browserOpen {
-            window.makeKey()
+        installDismissMonitors()
+    }
+
+    private func closePanel() {
+        guard let panel else { return }
+        removeDismissMonitors()
+        panel.orderOut(nil)
+    }
+
+    private func installDismissMonitors() {
+        removeDismissMonitors()
+        outsideMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self] _ in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.closeIfClickOutside() }
+            }
         }
+        localMouseMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self, let panel = self.panel, panel.isVisible else { return event }
+                if event.window === panel {
+                    if !NSApp.isActive {
+                        NSApp.activate(ignoringOtherApps: true)
+                    }
+                    if !panel.isKeyWindow {
+                        panel.makeKey()
+                    }
+                    return event
+                }
+                if self.isPanelWindow(event.window, panel: panel) {
+                    if !NSApp.isActive {
+                        NSApp.activate(ignoringOtherApps: true)
+                    }
+                    return event
+                }
+                if let button = self.item?.button, event.window === button.window {
+                    return event
+                }
+                self.closePanel()
+                return event
+            }
+        }
+        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self, let panel = self.panel, panel.isVisible,
+                      event.window === panel, event.keyCode == 53 else { return event }
+                self.closePanel()
+                return nil
+            }
+        }
+    }
+
+    private func isPanelWindow(_ window: NSWindow?, panel: MenuBarPanel) -> Bool {
+        guard let window else { return false }
+        return window === panel || window.sheetParent === panel || window.parent === panel
+    }
+
+    private func removeDismissMonitors() {
+        if let outsideMonitor { NSEvent.removeMonitor(outsideMonitor); self.outsideMonitor = nil }
+        if let localMouseMonitor { NSEvent.removeMonitor(localMouseMonitor); self.localMouseMonitor = nil }
+        if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor); self.escapeMonitor = nil }
+    }
+
+    private func closeIfClickOutside() {
+        guard let panel, panel.isVisible else { return }
+        let location = NSEvent.mouseLocation
+        if panel.frame.contains(location) { return }
+        if let button = item?.button, let window = button.window {
+            let rect = window.convertToScreen(button.convert(button.bounds, to: nil))
+            if rect.contains(location) { return }
+        }
+        closePanel()
     }
     @objc private func willSleep() { model?.willSleep() }
     @objc private func didWake() { model?.didWake() }
@@ -130,7 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if active.pausedAt == nil { model.pause() } else { model.resume() }
         } else {
             model.message = "No active session to pause or resume."
-            showPopover()
+            showPanel()
         }
         NSLog("Handled Tinycast Refold command: %@", command)
     }
@@ -146,7 +279,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let installed = InstallEventHandler(GetApplicationEventTarget(), { _, _, userData in
             guard let userData else { return OSStatus(eventNotHandledErr) }
             let delegate = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
-            MainActor.assumeIsolated { delegate.togglePopover() }
+            MainActor.assumeIsolated { delegate.togglePanel() }
             return noErr
         }, 1, &event, pointer, &eventHandler)
         let registered = RegisterEventHotKey(UInt32(kVK_ANSI_R), UInt32(controlKey | optionKey),
